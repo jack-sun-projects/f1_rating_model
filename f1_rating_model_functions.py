@@ -8,6 +8,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from pygam import LinearGAM, s, f, l, te
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 def fit_model(model, X, y):
 
@@ -17,100 +18,162 @@ def fit_model(model, X, y):
     fitted_model=model.fit(X, y)
     print("Complete", "\n")
 
-    # making predictions
-    y_pred=fitted_model.predict(X)
-
-    # calculating error
-    mae=mean_absolute_error(y, y_pred)
-    r2=r2_score(y, y_pred)
-
-    # explain why we don't use CV score ( we need all historical data!  )
-    # cv_mae=-np.mean(cross_val_score(model, X, y, scoring="neg_mean_absolute_error"))
-
-    print("Evaluation results: ", "\n", "MAE: ", round(mae, 2), "\n", "R-squared: ", round(r2, 3), sep="")
-
     return fitted_model
 
-def get_rankings(results, model, X, model_type, save_results):
-    
-    # getting predictions
+def evaluate_model(model, model_type, X, y, results):
 
-    results_full_pred=pd.concat([results.sort_values(['year', 'round', 'positionOrder'], ascending=[False, True, True]).reset_index(drop=True), pd.DataFrame(model.predict(X), columns=['prediction']).reset_index(drop=True)], axis=1)
-    results_full_pred['error']=results_full_pred['positionOrder']-results_full_pred['prediction']
-
-    # joining in coefficients relevant to ranking
-
-    if model_type=='ridge':
-
-        features=pd.concat([pd.DataFrame(X.columns), pd.DataFrame(model.coef_)], axis=1)
-        features.columns=['feature', 'coefficient']
-
-        results_full_pred=pd.merge(results_full_pred, features, how='left', left_on='driver_name', right_on='feature')
-        results_full_pred=results_full_pred.rename({'coefficient':'driver_coefficient'}, axis=1)
-        results_full_pred['yoe_coefficient']=features.loc[features['feature']=='yoe', 'coefficient'].iloc[0]*results_full_pred['yoe']
-        results_full_pred['years_from_prime_coefficient']=features.loc[features['feature']=='years_from_prime', 'coefficient'].iloc[0]*results_full_pred['years_from_prime']
-        results_full_pred['human_error_coefficient']=features.loc[features['feature']=='human_error', 'coefficient'].iloc[0]*results_full_pred['human_error']
-        results_full_pred['score']=results_full_pred.loc[:, ['error', 'driver_coefficient', 'yoe_coefficient', 'human_error_coefficient']].sum(axis=1)
-
-    elif model_type=='gam':
-        
-        features=pd.concat([pd.DataFrame(X.columns[0:4]), pd.DataFrame(model.coef_[0:4])], axis=1)
-        features.columns=['feature', 'coefficient']
-        con_year_features=pd.DataFrame(X.columns, columns=['feature']).tail(results['constructor_year'].nunique()).reset_index(drop=True)
-        con_year_coef=pd.DataFrame(model.coef_[:-1], columns=['coefficient']).tail(results['constructor_year'].nunique()).reset_index(drop=True)
-        con_year_features_coef=pd.concat([con_year_features, con_year_coef], axis=1)
-        features=pd.concat([features, con_year_features_coef], axis=0)
-
-        results_full_pred=pd.merge(results_full_pred, features, how='left', left_on='constructor_year', right_on='feature')
-        results_full_pred=results_full_pred.rename({'coefficient':'constructor_year_coefficient'}, axis=1)
-        results_full_pred['tech_problems_coef']=features.loc[features['feature']=='technical_problems', 'coefficient'].iloc[0]*results_full_pred['technical_problems']
-        results_full_pred['num_drivers_coef']=features.loc[features['feature']=='num_drivers', 'coefficient'].iloc[0]*results_full_pred['num_drivers']
-        results_full_pred['dnf_ratio_coef']=features.loc[features['feature']=='dnf_ratio', 'coefficient'].iloc[0]*results_full_pred['dnf_ratio']
-        results_full_pred['score']=results_full_pred['prediction']-results_full_pred['constructor_year_coefficient']-results_full_pred['tech_problems_coef']-results_full_pred['num_drivers_coef']-results_full_pred['dnf_ratio_coef']
-    
-    if save_results==True:
-        results_full_pred.to_csv("results_predictions_table.csv")
+    # calculating error
+    if "logistic" in model_type:
+        y_pred=pd.DataFrame(model.predict_proba(X), columns=['proba_prediction'])
+        results_full=pd.concat([results.reset_index(drop=True), y_pred.reset_index(drop=True)], axis=1)
+        results_full['prediction']=results_full['proba_prediction']*(results_full['num_drivers']-1)+1
+        results_full['error']=results['positionOrder']-results_full['prediction']
+        results_full['abs_error']=abs(results_full['error'])
+        mae=mean_absolute_error(results_full['positionOrder'], results_full['prediction'])
+        mse=mean_squared_error(results_full['positionOrder'], results_full['prediction'])
+        r2=r2_score(results_full['positionOrder'], results_full['prediction'])
     else:
-        pass
+        y_pred=model.predict(X)
+        mae=mean_absolute_error(y, y_pred)
+        mse=mean_squared_error(y, y_pred)
+        r2=r2_score(y, y_pred)
 
-    # grouping and calculating score by year
+        # explain why we don't use CV score ( we need all historical data!  )
+        # cv_mae=-np.mean(cross_val_score(model, X, y, scoring="neg_mean_absolute_error"))
 
-    driver_min_max=results_full_pred.groupby('driver_name').agg(
+    print("Evaluation results: ", "\n", "MAE: ", round(mae, 2), "\n", "MSE: ", round(mse, 2), "\n", "R-squared: ", round(r2, 3), sep="")
+
+def get_rankings(model, model_type, X, results, ranking="3yma", min_races_season=3):
+    
+    # getting error term
+    if "logistic" in model_type:
+        errors=pd.concat([results, pd.DataFrame(model.predict_proba(X), columns=['prediction'])], axis=1)
+        errors['error']=errors['position_percentile']-errors['prediction']
+    else:
+        errors=pd.concat([results, pd.DataFrame(model.predict(X), columns=['prediction'])], axis=1)
+        errors['error']=errors['positionOrder']-errors['prediction']
+    errors=errors['error']
+
+    # getting predictions without non-driver factors and calculating 'true' score
+    X_scores=X.copy()
+    first_constructor_index=pd.DataFrame(X_scores.columns).loc[X_scores.columns.str.contains('1950'), :].index[0] # this seems very slow
+    X_scores.iloc[:, first_constructor_index:]=0
+    X_scores=pd.concat([X_scores, results['status']], axis=1)
+    #X_scores=X_scores.loc[X_scores['status']!='retired_technical_error', :]
+
+    if "ridge" in model_type: #should we predict on specific car/other factors as long as they're even for better interpretability?
+        X_scores.loc[X_scores['status']!='retired_human_error', 'dnf']=0
+        X_scores=X_scores.drop('status', axis=1)
+        X_scores['num_drivers']=20
+    if "gam" in model_type:
+        #X_scores.loc[X_scores['status']=='retired_technical_error', ['dnf', 'race%_not_completed']]=0
+        X_scores=X_scores.drop('status', axis=1)
+        X_scores['num_drivers']=20
+        X_scores['finish_ratio']=0.875
+
+    if "logistic" in model_type:
+        predictions=model.predict_proba(X_scores)
+    else:
+        predictions=model.predict(X_scores)
+
+    full_predictions=pd.concat([results, pd.DataFrame(predictions, columns=['prediction']), errors], axis=1)
+    full_predictions=full_predictions.loc[full_predictions['status']!='retired_technical_error', :]
+    full_predictions['score']=full_predictions['prediction']+full_predictions['error']
+    
+    # getting the first and last year of each driver's career
+    driver_min_max=full_predictions.groupby('driver_name').agg(
         first_year=('year', 'min')
         ,last_year=('year', 'max')
     ).reset_index()
     driver_min_max=driver_min_max.merge(pd.DataFrame(np.arange(1950, datetime.date.today().year+1), columns=['year']), how='cross')
     driver_min_max=driver_min_max.loc[(driver_min_max['year']>=driver_min_max['first_year'])&(driver_min_max['year']<=driver_min_max['last_year']), ['driver_name', 'year']]
 
-    rankings=results_full_pred.groupby(by=['driver_name', 'year']).agg(
-        num_counting_races=('technical_problems', lambda x: (x==0).sum()),
-        score=('score', 'median')
+    # filtering out seasons in which drivers finished less than 3 races
+    rankings=full_predictions.groupby(by=['driver_name', 'year']).agg(
+        num_counting_races=('status', lambda x: ((~x.str.contains('retired_technical_error'))).count()),
+        score=('score', 'median') #median or mean? 
     ).reset_index()
-    rankings=rankings.loc[rankings['num_counting_races']>=3, :].drop(['num_counting_races'], axis=1)
-
+    rankings=rankings.loc[rankings['num_counting_races']>=min_races_season, :].drop(['num_counting_races'], axis=1)
     rankings=driver_min_max.merge(rankings, how='left', on=['driver_name', 'year'])
-    rankings['3yma_score']=rankings.groupby('driver_name')['score'].transform(lambda x: x.rolling(3, 3).mean())
-    overall_rankings=rankings.groupby('driver_name').agg({'3yma_score':'min'}).reset_index().sort_values('3yma_score')
-    overall_rankings=overall_rankings.loc[overall_rankings['3yma_score'].notnull(), :]
 
-    return overall_rankings
+    # grouping and calculating score by year
+    if ranking=='annual':
+        rankings=rankings.loc[rankings['score'].notnull(), :].sort_values('score').reset_index(drop=True)
+        rankings['score']=rankings['score'].round(3)
+        return rankings
+    if ranking=='3yma':
+        rankings['3yma_score']=rankings.groupby('driver_name')['score'].transform(lambda x: x.rolling(3, 3).mean())
+        rankings=rankings.loc[rankings['3yma_score'].notnull(), :]
+        rankings=rankings.sort_values('3yma_score').groupby('driver_name').head(1).reset_index(drop=True).drop(['score'], axis=1)
+        rankings['year']=(rankings['year']-2).astype('str') + " - " + rankings['year'].astype('str')
+        rankings['3yma_score']=rankings['3yma_score'].round(3)
+        return rankings
+    
+def get_constructor_rankings(model, model_type, X):
+    
+    first_constructor_index=pd.DataFrame(X.columns).loc[X.columns.str.contains('1950'), :].index[0] # this seems very slow
+    constructor_list=pd.DataFrame(X.columns[first_constructor_index:], columns=['constructor_year'])
+    if "gam" in model_type:
+        constructor_coefficients=pd.DataFrame(model.coef_[-(len(X.columns)-first_constructor_index)-1:-1], columns=['coefficient'])
+    else:
+        constructor_coefficients=pd.DataFrame(model.coef_[-(len(X.columns)-first_constructor_index):], columns=['coefficient'])
+    constructor_rankings=pd.concat([constructor_list, constructor_coefficients], axis=1).sort_values('coefficient').reset_index(drop=True)
+    constructor_rankings['coefficient']=constructor_rankings['coefficient'].round(2)
 
-def get_race_predictions(results, model, X, year, round):
+    return constructor_rankings
 
-    results_full_pred=pd.concat([results.sort_values(['year', 'round', 'positionOrder'], ascending=[False, True, True]).reset_index(drop=True), pd.DataFrame(model.predict(X), columns=['prediction']).reset_index(drop=True)], axis=1)
-    race_results_predictions=results_full_pred.loc[(results_full_pred['year']==year) & (results_full_pred['round']==round), :]
-    race_results_predictions['error']=race_results_predictions['positionOrder']-race_results_predictions['prediction']
+def get_race_predictions(model, model_type, X, results, year_range=[], round_range=[], driver=[]): #maybe add scores and stuff?
 
-    return race_results_predictions
+    if "logistic" in model_type:
+        results_full_pred=pd.concat([results.reset_index(drop=True), pd.DataFrame(model.predict_proba(X), columns=['prediction']).reset_index(drop=True)], axis=1)
+    else:
+        results_full_pred=pd.concat([results.reset_index(drop=True), pd.DataFrame(model.predict(X), columns=['prediction']).reset_index(drop=True)], axis=1)
+        
+    if year_range:
+        results_full_pred=results_full_pred.loc[(results_full_pred['year']>=year_range[0]) & (results_full_pred['year']<=year_range[1]), :]
+    else: pass
 
-def get_coefficient(results, model, X, feature_name):
+    if round_range:
+        results_full_pred=results_full_pred.loc[(results_full_pred['round']>=round_range[0]) & (results_full_pred['round']<=round_range[1]), :]
+    else: pass
 
-    if model==ridge:
+    if driver:
+        results_full_pred=results_full_pred.loc[results_full_pred['driver_name'].isin(driver), :]
+    else: pass
+    
+    if "logistic" in model_type:
+        results_full_pred['prediction']=results_full_pred['prediction']*(results_full_pred['num_drivers']-1)+1
+        results_full_pred['error']=results_full_pred['positionOrder']-results_full_pred['prediction']
+    else:
+        results_full_pred['error']=results_full_pred['positionOrder']-results_full_pred['prediction']
+
+    results_full_pred=results_full_pred.drop([
+        'dob'
+        ,'dnf'
+        ,'race%_not_completed'
+        ,'num_finishing_drivers'
+        ,'num_drivers'
+        ,'finish_ratio'
+        ,'yoe'
+        ,'years_from_prime'
+	,'dnf_interaction'
+	,'dnf_race%_interaction'
+	,'dnf_finish_interaction'
+    ], axis=1)
+    results_full_pred[['age', 'prediction', 'error']]=results_full_pred[['age', 'prediction', 'error']].round(1)
+
+    return results_full_pred
+
+def get_coefficient(model, model_type, X, feature_name):
+
+    if model_type=='ridge':
         features=pd.concat([pd.DataFrame(X.columns), pd.DataFrame(model.coef_)], axis=1)
 
-    elif model==gam:
-        features=pd.concat([pd.DataFrame(X.columns), pd.DataFrame(model.coef_[:-1])], axis=1)
-
     features.columns=['feature', 'coefficient']
-
     return features.loc[features['feature']==feature_name, :]
+
+def calculate_vif(X):
+    vif = pd.DataFrame()
+    vif["Feature"] = X.columns
+    vif["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+    return vif
