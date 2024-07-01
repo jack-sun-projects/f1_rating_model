@@ -43,7 +43,7 @@ def evaluate_model(model, model_type, X, y, results):
 
     print("Evaluation results: ", "\n", "MAE: ", round(mae, 2), "\n", "MSE: ", round(mse, 2), "\n", "R-squared: ", round(r2, 3), sep="")
 
-def get_rankings(model, model_type, X, results, ranking="3yma", min_races_season=3):
+def get_rankings(model, model_type, X, results, ranking="3yma", min_races_season=3, download=False):
     
     # getting error term
     if "logistic" in model_type:
@@ -59,14 +59,12 @@ def get_rankings(model, model_type, X, results, ranking="3yma", min_races_season
     first_constructor_index=pd.DataFrame(X_scores.columns).loc[X_scores.columns.str.contains('1950'), :].index[0] # this seems very slow
     X_scores.iloc[:, first_constructor_index:]=0
     X_scores=pd.concat([X_scores, results['status']], axis=1)
-    #X_scores=X_scores.loc[X_scores['status']!='retired_technical_error', :]
 
     if "ridge" in model_type: #should we predict on specific car/other factors as long as they're even for better interpretability?
         X_scores.loc[X_scores['status']!='retired_human_error', 'dnf']=0
         X_scores=X_scores.drop('status', axis=1)
         X_scores['num_drivers']=20
     if "gam" in model_type:
-        #X_scores.loc[X_scores['status']=='retired_technical_error', ['dnf', 'race%_not_completed']]=0
         X_scores=X_scores.drop('status', axis=1)
         X_scores['num_drivers']=20
         X_scores['finish_ratio']=0.875
@@ -79,7 +77,17 @@ def get_rankings(model, model_type, X, results, ranking="3yma", min_races_season
     full_predictions=pd.concat([results, pd.DataFrame(predictions, columns=['prediction']), errors], axis=1)
     full_predictions=full_predictions.loc[full_predictions['status']!='retired_technical_error', :]
     full_predictions['score']=full_predictions['prediction']+full_predictions['error']
-    
+
+    if download is True:
+        full_predictions.drop([
+            'dnf'
+            ,'num_finishing_drivers'
+            ,'date'
+            ,'years_from_prime'
+        ], axis=1).to_excel('full_ratings.xlsx')
+    else:
+        None
+        
     # getting the first and last year of each driver's career
     driver_min_max=full_predictions.groupby('driver_name').agg(
         first_year=('year', 'min')
@@ -109,7 +117,7 @@ def get_rankings(model, model_type, X, results, ranking="3yma", min_races_season
         rankings['3yma_score']=rankings['3yma_score'].round(3)
         return rankings
     
-def get_constructor_rankings(model, model_type, X):
+def get_constructor_rankings(model, model_type, X, download=False):
     
     first_constructor_index=pd.DataFrame(X.columns).loc[X.columns.str.contains('1950'), :].index[0] # this seems very slow
     constructor_list=pd.DataFrame(X.columns[first_constructor_index:], columns=['constructor_year'])
@@ -119,6 +127,11 @@ def get_constructor_rankings(model, model_type, X):
         constructor_coefficients=pd.DataFrame(model.coef_[-(len(X.columns)-first_constructor_index):], columns=['coefficient'])
     constructor_rankings=pd.concat([constructor_list, constructor_coefficients], axis=1).sort_values('coefficient').reset_index(drop=True)
     constructor_rankings['coefficient']=constructor_rankings['coefficient'].round(2)
+
+    if download is True:
+        constructor_rankings.to_excel('constructor_rankings.xlsx')
+    else:
+        None
 
     return constructor_rankings
 
