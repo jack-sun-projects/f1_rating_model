@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dropdown Example</title>
+</head>
+<body>
+    <h1>Select a year</h1>
+    <form method="POST" action="/submit_year">
+        <label for="numbers">Choose a year:</label>
+        <select name="numbers" id="numbers">
+            {% for number in numbers %}
+                <option value="{{ number }}">{{ number }}</option>
+            {% endfor %}
+        </select>
+        <input type="submit" value="Submit">
+    </form>
+</body>

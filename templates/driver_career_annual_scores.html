@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Driver career annual scores</title>
+    <style>
+        .container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <h1 class="mt-4">Driver career annual scores</h1>
+    <div class="container" style="margin-bottom: 20px;">
+        <img src="data:image/png;base64,{{ plot_url }}" alt="Matplotlib Plot" class="center">
+    </div>
+    <div class="container">
+        <div>
+            {{ table|safe }}
+        </div>
+    </div>
+</body>
+</html>

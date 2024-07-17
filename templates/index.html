@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-BmbxuPwQa2lc/FVzBcNJ7UAyJxM6wuqIj61tLrc4wSX0szH/Ev+nYRRuWlolflfl" crossorigin="anonymous">
+    </head>
+
+    <body>
+        <h1 class="text-center">F1 rating model</h1>
+        <nav>
+            <ol>
+                <li><b>Driver career ranking</b>
+                    <ol type="a">
+                        <li><a href="{{ url_for('driver_career_ranking_3yma') }}">Consecutive three-year peak</a></li>
+                        <li><a href="{{ url_for('driver_career_ranking_5yma') }}">Consecutive five-year peak</a></li>
+                    </ol>
+                </li>
+                <li><b>Annual driver ranking</b>
+                    <ol type="a">
+                        <li><a href="{{ url_for('year_list') }}">Annual ranking</a></li>
+                        <li><a href="{{ url_for('driver_list') }}">Driver career annual scores</a></li>
+                    </ol>
+                </li>
+            </ol>
+        </nav>
+    </body>
+</html>
